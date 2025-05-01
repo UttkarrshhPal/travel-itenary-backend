@@ -13,7 +13,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
-        "https://travel-itinerary-frontend-wheat.vercel.app/",
+        "https://travel-itinerary-frontend-wheat.vercel.app",
     ],  # Add your frontend URL
     allow_credentials=True,
     allow_methods=["*"],
