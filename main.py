@@ -148,7 +148,7 @@ app = FastAPI()
 # Allow frontend dev server for local testing
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "https://travel-itenary-frontend.vercel.app/"],
+    allow_origins=["http://localhost:3000", "https://travel-itenary-frontend.vercel.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
