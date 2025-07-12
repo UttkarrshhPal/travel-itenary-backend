@@ -9,8 +9,9 @@ from fastapi import (
     Response,
     Cookie,
     Form,
+    Security,
 )
-from fastapi.security import OAuth2PasswordRequestForm
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from pydantic import BaseModel
@@ -28,6 +29,8 @@ logger = logging.getLogger(__name__)
 SECRET_KEY = "your-secret-key"  # Change this in production!
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
+
+security = HTTPBearer()
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -130,8 +133,8 @@ def get_current_user_from_token(
         raise credentials_exception
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: str = payload.get("sub")
-        if username is None:
+        username: str = payload.get("sub", "")
+        if not username:
             raise credentials_exception
     except JWTError:
         raise credentials_exception
@@ -148,10 +151,14 @@ app = FastAPI()
 # Allow frontend dev server for local testing
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "https://travel-itenary-frontend.vercel.app"],
+    allow_origins=[
+        "http://localhost:3000",
+        "https://travel-itenary-frontend.vercel.app",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 
@@ -214,46 +221,69 @@ def register(user_data: UserRegister, db: Session = Depends(get_db)):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Registration failed: {str(e)}",
         )
-
-
-# Update authentication functions to use database
-def get_user(db: Session, username: str):
-    return db.query(models.User).filter(models.User.username == username).first()
-
-
-def authenticate_user(db: Session, username: str, password: str):
+        
+def get_current_user_from_header(
+    credentials: HTTPAuthorizationCredentials = Security(security),
+    db: Session = Depends(get_db)
+):
+    token = credentials.credentials
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username = payload.get("sub")
+        if not isinstance(username, str) or not username:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+    
     user = get_user(db, username)
-    if not user:
-        return False
-    if not verify_password(password, user.hashed_password):
-        return False
+    if user is None:
+        raise credentials_exception
     return user
+
+
+
+def get_current_user(
+    token_cookie: str = Cookie(None),
+    auth_header: HTTPAuthorizationCredentials = Security(security),
+    db: Session = Depends(get_db),
+):
+    # Try header first
+    if auth_header:
+        return get_current_user_from_header(auth_header, db)
+    # Fall back to cookie
+    elif token_cookie:
+        return get_current_user_from_token(token_cookie, db)
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated"
+        )
 
 
 @app.post("/login")
 def login(
-    response: Response,
-    username: str = Form(...),
-    password: str = Form(...),
-    db: Session = Depends(get_db),  # Add this dependency
+    username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)
 ):
-    # Use db instead of users_db
     user = authenticate_user(db, username, password)
     if not user:
         raise HTTPException(status_code=400, detail="Incorrect username or password")
 
-    # Use user object attributes instead of dictionary keys
     access_token = create_access_token(data={"sub": user.username, "role": user.role})
-    response.set_cookie(
-        key="token",
-        value=access_token,
-        httponly=True,
-        secure=False,  # Set to True in production with HTTPS
-        samesite="lax",
-        max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-        path="/",
-    )
-    return {"message": "Login successful"}
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": {
+            "username": user.username,
+            "full_name": user.full_name,
+            "role": user.role,
+        },
+    }
 
 
 @app.post("/logout")
@@ -263,11 +293,11 @@ def logout(response: Response):
 
 
 @app.get("/me")
-def read_users_me(current_user: models.User = Depends(get_current_user_from_token)):
+def read_users_me(current_user: models.User = Depends(get_current_user)):
     return {
-        "username": current_user.username,
-        "full_name": current_user.full_name,
-        "role": current_user.role,
+        "username": current_user.username, 
+        "full_name": current_user.full_name, 
+        "role": current_user.role
     }
 
 
